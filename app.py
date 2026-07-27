@@ -6,6 +6,7 @@ import pickle
 import pandas as pd
 import streamlit as st
 import numpy as np
+import xgboost
 
 # --- 1. CONFIGURATION & UI SETUP ---
 st.set_page_config(page_title="Vendor Fraud Detection", page_icon="🛡️", layout="wide")
