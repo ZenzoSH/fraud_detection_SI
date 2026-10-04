@@ -110,8 +110,31 @@ if uploaded_file is not None and model is not None:
                     )
 
                 # --- 6. DATA SCALING ---
-                # Scale features using the pre-trained scaler
-                X_scaled = scaler.transform(X)
+                # The saved scaler may have been fitted before one-hot columns
+                # were added. Scale only the columns recorded by that scaler,
+                # then pass the complete model feature matrix to the model.
+                scaler_columns = getattr(scaler, "feature_names_in_", None)
+                if scaler_columns is not None:
+                    scaler_columns = list(scaler_columns)
+                    missing_scaler_columns = [
+                        column for column in scaler_columns if column not in X.columns
+                    ]
+                    if missing_scaler_columns:
+                        raise ValueError(
+                            "The uploaded data is missing scaler input columns: "
+                            f"{missing_scaler_columns}"
+                        )
+                    scaled_values = scaler.transform(X[scaler_columns])
+                    model_input = X.copy()
+                    model_input.loc[:, scaler_columns] = scaled_values
+                    X_scaled = model_input.to_numpy()
+                elif getattr(scaler, "n_features_in_", len(expected_cols)) == len(expected_cols):
+                    X_scaled = scaler.transform(X.to_numpy())
+                else:
+                    raise ValueError(
+                        "The saved scaler feature schema is incompatible with the "
+                        "model feature list."
+                    )
 
                 # --- 7. INFERENCE (PREDICTION) ---
                 # Predict fraud probabilities using XGBoost

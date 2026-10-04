@@ -14,6 +14,7 @@ fraud_detection_SI/
 │
 ├── app.py                  # Main Streamlit application and ML logic
 ├── requirements.txt        # Python dependencies
+├── sample_data/             # Synthetic CSVs for local testing only
 ├── .gitignore              # Git ignore file (excludes venv, pycache, etc.)
 └── models/                 # Directory containing the pre-trained ML files
     ├── xgb_model.pkl       # The XGBoost prediction engine
@@ -69,6 +70,14 @@ the feature columns expected by the model and no real customer information. Uplo
 it through the dashboard, review the risk indicators, and download the results.
 Record the model version, dataset source, and evaluation metrics separately if they
 become available; do not invent these values.
+
+The repository includes synthetic test files in `sample_data/`:
+
+- `sample_transactions.csv` — normal mixed transaction examples.
+- `sample_suspicious_transactions.csv` — synthetic high-value patterns for review.
+- `sample_invalid_transactions.csv` — invalid numeric values for testing validation errors.
+
+These files contain no real customer, account, or payment information.
 
 ---
 
