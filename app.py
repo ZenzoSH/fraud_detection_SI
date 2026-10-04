@@ -13,6 +13,20 @@ import xgboost
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 MAX_UPLOAD_SIZE_MB = 10
+REQUIRED_NUMERIC_COLUMNS = [
+    "step",
+    "amount",
+    "oldbalanceOrg",
+    "newbalanceOrig",
+    "oldbalanceDest",
+    "newbalanceDest",
+]
+TRANSACTION_TYPE_COLUMNS = [
+    "type_CASH_OUT",
+    "type_DEBIT",
+    "type_PAYMENT",
+    "type_TRANSFER",
+]
 
 # --- 1. CONFIGURATION & UI SETUP ---
 st.set_page_config(page_title="Vendor Fraud Detection", page_icon="🛡️", layout="wide")
@@ -27,6 +41,16 @@ st.info(
     "This dashboard provides risk indicators only. A HIGH risk result does not "
     "confirm fraud and must be verified through the official payment provider."
 )
+
+
+def show_actionable_error(title, problem, fix, example=None):
+    """Show a known problem together with steps the user can take to fix it."""
+    st.error(f"{title}: {problem}")
+    with st.expander("How to fix this", expanded=True):
+        st.markdown(fix)
+        if example:
+            st.code(example, language="text")
+
 
 # --- 2. MODEL LOADING ---
 @st.cache_resource
@@ -48,7 +72,13 @@ try:
     model, scaler, expected_cols = load_models()
 except (OSError, EOFError, ValueError, pickle.UnpicklingError) as error:
     model, scaler, expected_cols = None, None, None
-    st.error(f"Unable to load the fraud-detection model files: {error}")
+    show_actionable_error(
+        "Model files could not be loaded",
+        str(error),
+        "Confirm that `models/xgb_model.pkl`, `models/scaler.pkl`, and "
+        "`models/column_names.pkl` exist. Install the versions from "
+        "`requirements.txt`, then restart Streamlit.",
+    )
 
 # --- 3. INSTRUCTIONS ---
 with st.expander("📖 How to use this tool", expanded=True):
@@ -70,7 +100,12 @@ uploaded_file = st.file_uploader("Upload Transaction CSV", type=["csv"])
 
 if uploaded_file is not None and model is not None:
     if uploaded_file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-        st.error(f"Please upload a CSV smaller than {MAX_UPLOAD_SIZE_MB} MB.")
+        show_actionable_error(
+            "File is too large",
+            f"The upload is larger than {MAX_UPLOAD_SIZE_MB} MB.",
+            "Export only the columns needed for analysis, remove unnecessary "
+            "rows, or split the file into smaller CSV files.",
+        )
         st.stop()
 
     if st.button("🔍 Run Fraud Detection", use_container_width=True):
@@ -79,11 +114,42 @@ if uploaded_file is not None and model is not None:
                 # Read the CSV file
                 df = pd.read_csv(uploaded_file)
                 if df.empty:
-                    raise ValueError("The uploaded CSV does not contain any rows.")
+                    show_actionable_error(
+                        "CSV contains no data rows",
+                        "The file has headers but no transaction records.",
+                        "Add at least one transaction row below the header, save "
+                        "the file as CSV, and upload it again. You can use the "
+                        "files in `sample_data/` as formatting examples.",
+                        ", ".join(REQUIRED_NUMERIC_COLUMNS + ["type"]),
+                    )
+                    st.stop()
                 if df.columns.duplicated().any():
                     duplicate_columns = df.columns[df.columns.duplicated()].tolist()
+                    show_actionable_error(
+                        "Duplicate column names",
+                        f"These headers appear more than once: {duplicate_columns}",
+                        "Open the CSV in a spreadsheet editor, rename or remove the "
+                        "duplicate headers, save it again as CSV, and re-upload it.",
+                    )
+                    st.stop()
+
+                missing_numeric_columns = [
+                    column for column in REQUIRED_NUMERIC_COLUMNS if column not in df.columns
+                ]
+                if missing_numeric_columns:
                     raise ValueError(
-                        f"Duplicate column names are not supported: {duplicate_columns}"
+                        "Required transaction columns are missing: "
+                        f"{missing_numeric_columns}"
+                    )
+
+                has_raw_type = "type" in df.columns
+                has_encoded_type = any(
+                    column in df.columns for column in TRANSACTION_TYPE_COLUMNS
+                )
+                if not has_raw_type and not has_encoded_type:
+                    raise ValueError(
+                        "No transaction type column was found. Add a `type` column "
+                        "or the expected type indicator columns."
                     )
 
                 # Keep a copy of the original data to display later
@@ -193,6 +259,57 @@ if uploaded_file is not None and model is not None:
                 )
 
             except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as error:
-                st.error(f"Unable to read the CSV file: {error}")
+                show_actionable_error(
+                    "CSV could not be read",
+                    str(error),
+                    "Open the file in a spreadsheet editor and export it as "
+                    "comma-separated CSV using UTF-8 encoding. Ensure every row "
+                    "has the same number of columns and does not contain broken "
+                    "quotes or unsupported separators.",
+                )
             except (ValueError, KeyError, TypeError) as error:
-                st.error(f"Unable to analyse the uploaded data: {error}")
+                message = str(error)
+                if "Required transaction columns are missing" in message:
+                    fix = (
+                        "Add all required numeric columns to the CSV. Use the exact "
+                        "lowercase headers shown below; do not rename them."
+                    )
+                    example = ", ".join(REQUIRED_NUMERIC_COLUMNS)
+                elif "No transaction type column" in message:
+                    fix = (
+                        "Add a `type` column containing values such as PAYMENT, "
+                        "TRANSFER, CASH_OUT, or DEBIT. Alternatively, provide the "
+                        "four encoded type columns shown below."
+                    )
+                    example = "type\nPAYMENT\nTRANSFER\nCASH_OUT"
+                elif "missing or non-numeric" in message:
+                    fix = (
+                        "Find the listed columns in your CSV and replace text such "
+                        "as `missing`, `N/A`, currency symbols, or blank cells with "
+                        "valid numbers. Save the corrected file and upload it again."
+                    )
+                    example = "amount,oldbalanceOrg\n250.00,1000.00"
+                elif "feature schema is incompatible" in message:
+                    fix = (
+                        "The saved model and scaler do not belong to the same "
+                        "feature version. Restore the model files from this "
+                        "repository together and restart the app."
+                    )
+                    example = None
+                elif "feature names" in message or "n_features" in message:
+                    fix = (
+                        "The model artifacts and preprocessing schema do not match. "
+                        "Make sure all files in `models/` came from the same project "
+                        "version, then restart Streamlit. Do not edit the pickle "
+                        "files manually."
+                    )
+                    example = None
+                else:
+                    fix = (
+                        "Check that the CSV uses the expected headers and numeric "
+                        "values. If the problem continues, use one of the synthetic "
+                        "files in `sample_data/` to confirm that the application "
+                        "environment is configured correctly."
+                    )
+                    example = None
+                show_actionable_error("Unable to analyse the uploaded data", message, fix, example)
