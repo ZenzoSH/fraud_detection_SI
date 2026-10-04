@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import xgboost
+from app_helpers import risk_summary
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
@@ -26,6 +27,15 @@ TRANSACTION_TYPE_COLUMNS = [
     "type_DEBIT",
     "type_PAYMENT",
     "type_TRANSFER",
+]
+VERIFICATION_STATUSES = [
+    "Not Reviewed",
+    "Verified Successful",
+    "Payment Pending",
+    "Payment Failed",
+    "Payment Reversed",
+    "Requires Provider Support",
+    "No Issue Found",
 ]
 
 # --- 1. CONFIGURATION & UI SETUP ---
@@ -224,17 +234,56 @@ if uploaded_file is not None and model is not None:
 
                 # --- 8. RESULTS DISPLAY ---
                 st.subheader("Detection Results")
-                
-                n_total = len(results_df)
-                n_high = (results_df["Risk_Level"] == "HIGH").sum()
-                
-                m1, m2 = st.columns(2)
-                m1.metric("Total Transactions Scanned", n_total)
-                m2.metric("High Risk Anomalies", int(n_high))
+                results_df["Verification_Status"] = "Not Reviewed"
+                results_df["Action_Taken"] = ""
+
+                summary = risk_summary(results_df)
+                summary_columns = st.columns(5)
+                summary_columns[0].metric("Transactions Scanned", summary["total"])
+                summary_columns[1].metric("LOW Risk", summary["low"])
+                summary_columns[2].metric("MEDIUM Risk", summary["medium"])
+                summary_columns[3].metric("HIGH Risk", summary["high"])
+                summary_columns[4].metric("Needs Review", summary["review_count"])
+                st.caption(
+                    f"Total amount: {summary['total_amount']:,.2f} | "
+                    f"LOW/MEDIUM/HIGH amount requiring review: "
+                    f"{summary['review_amount']:,.2f}"
+                )
                 st.caption(
                     "Risk levels are screening indicators. Confirm unusual activity "
                     "using your bank or payment provider before taking action."
                 )
+
+                st.subheader("Risk explanation")
+                st.markdown(
+                    "- **LOW (below 40):** Continue normal payment verification.\n"
+                    "- **MEDIUM (40 to below 75):** Perform additional checks.\n"
+                    "- **HIGH (75 or above):** Review immediately through the official "
+                    "payment provider.\n\n"
+                    "These are model-generated screening indicators, not confirmed "
+                    "probabilities of fraud."
+                )
+
+                st.subheader("Review and filter results")
+                filter_columns = st.columns(3)
+                selected_risks = filter_columns[0].multiselect(
+                    "Risk levels",
+                    ["HIGH", "MEDIUM", "LOW"],
+                    default=["HIGH", "MEDIUM", "LOW"],
+                )
+                selected_types = filter_columns[1].multiselect(
+                    "Transaction types",
+                    sorted(results_df["type"].dropna().unique()),
+                    default=sorted(results_df["type"].dropna().unique()),
+                )
+                sort_by = filter_columns[2].selectbox(
+                    "Sort results by",
+                    ["Fraud_Probability", "amount", "step"],
+                )
+                filtered_df = results_df[
+                    results_df["Risk_Level"].isin(selected_risks)
+                    & results_df["type"].isin(selected_types)
+                ].sort_values(sort_by, ascending=False)
 
                 # Highlight rows based on risk level
                 def highlight_risk(row):
@@ -244,19 +293,116 @@ if uploaded_file is not None and model is not None:
                         return ["background-color: #5c4a1a"] * len(row)
                     return [""] * len(row)
 
-                st.dataframe(
-                    results_df.style.apply(highlight_risk, axis=1),
+                edited_df = st.data_editor(
+                    filtered_df.style.apply(highlight_risk, axis=1),
                     use_container_width=True,
                     hide_index=True,
+                    column_config={
+                        "Verification_Status": st.column_config.SelectboxColumn(
+                            "Verification Status",
+                            options=VERIFICATION_STATUSES,
+                            required=True,
+                        ),
+                        "Action_Taken": st.column_config.TextColumn(
+                            "Action Taken",
+                            help="Optional: record the verification action without "
+                            "entering customer or account information.",
+                        ),
+                    },
+                    disabled=[
+                        column
+                        for column in filtered_df.columns
+                        if column not in {"Verification_Status", "Action_Taken"}
+                    ],
+                    key="results_editor",
                 )
 
                 # Provide a download button for the results
                 st.download_button(
                     "Download Results (CSV)",
-                    results_df.to_csv(index=False),
+                    edited_df.to_csv(index=False),
                     file_name="fraud_detection_results.csv",
                     mime="text/csv",
                 )
+
+                st.subheader("Review checklist")
+                checklist_columns = st.columns(2)
+                checklist_items = [
+                    "Checked the official payment-provider status",
+                    "Confirmed the amount matches the sale",
+                    "Confirmed the transaction is successful",
+                    "Checked that the payment is not pending or reversed",
+                    "Contacted official support if required",
+                    "Recorded the verification result without private customer data",
+                ]
+                for index, item in enumerate(checklist_items):
+                    checklist_columns[index % 2].checkbox(item, key=f"check_{index}")
+
+                st.subheader("What to do next")
+                st.markdown(
+                    """
+                    Use this report to **prioritise verification**. A risk level is
+                    only a screening indicator and does not confirm fraud.
+
+                    1. **Review HIGH rows first.** Open each transaction in the
+                       official bank or payment-provider application and confirm
+                       that the amount, status, and transaction reference match.
+                    2. **Check MEDIUM rows next.** Verify the payment status,
+                       amount, transaction type, and balance changes before
+                       completing or settling the sale.
+                    3. **Continue normal checks for LOW rows.** Confirm that the
+                       payment is successful in the official account; LOW does not
+                       guarantee that a transaction is safe.
+                    4. **Do not rely on screenshots or this dashboard alone.**
+                       If a payment is missing, pending, reversed, or inconsistent,
+                       pause delivery and contact the payment provider through an
+                       official support channel.
+                    5. **Keep a secure review record.** Record the transaction
+                       reference, verification result, and follow-up action without
+                       publishing customer or account information.
+                    """
+                )
+                st.warning(
+                    "Never accuse a customer, issue a refund, or hand over goods "
+                    "based only on a model result. Verify the payment independently."
+                )
+
+                with st.expander("Anonymous user feedback"):
+                    st.caption(
+                        "This optional feedback is for improving the project. Do not "
+                        "enter names, phone numbers, account numbers, or transaction IDs."
+                    )
+                    feedback_clarity = st.radio(
+                        "Was the dashboard easy to understand?",
+                        ["Yes", "Partly", "No"],
+                        horizontal=True,
+                    )
+                    feedback_usefulness = st.radio(
+                        "Would this review workflow be useful for your shop?",
+                        ["Yes", "Partly", "No"],
+                        horizontal=True,
+                    )
+                    feedback_improvement = st.selectbox(
+                        "Which improvement would help most?",
+                        [
+                            "Simpler explanations",
+                            "More filters",
+                            "Better transaction reports",
+                            "Payment-provider integration",
+                            "Training or awareness material",
+                        ],
+                    )
+                    feedback_notes = st.text_area(
+                        "Additional feedback (optional)",
+                        max_chars=500,
+                        help="Keep this anonymous and do not enter transaction details.",
+                    )
+                    if st.button("Save anonymous feedback"):
+                        st.success(
+                            "Thank you. Feedback captured for this session only: "
+                            f"{feedback_clarity}, {feedback_usefulness}, "
+                            f"{feedback_improvement}."
+                        )
 
             except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as error:
                 show_actionable_error(

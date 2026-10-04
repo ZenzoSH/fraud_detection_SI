@@ -7,6 +7,10 @@ An AI-powered dashboard designed to help local vendors review potentially suspic
 - **Automated Feature Engineering:** Dynamically processes vendor CSVs, generates necessary dummy variables, and scales data using pre-trained StandardScaler weights.
 - **Interactive UI:** Built entirely in Streamlit for an intuitive, easy-to-use merchant experience.
 - **One-Click Export:** Download the flagged anomalies and risk-scored dataset instantly.
+- **Risk Summary:** Shows LOW, MEDIUM, HIGH, and review-required counts plus amounts.
+- **Review Workflow:** Provides filters, sorting, verification status, action notes, and a checklist.
+- **Community Feedback:** Collects optional anonymous usability feedback for project improvement.
+- **Input Protection:** Validates file size, empty files, duplicate columns, and non-numeric model inputs.
 
 ## 📁 Project Structure
 ```text
