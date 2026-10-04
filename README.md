@@ -1,6 +1,6 @@
 # 🛡️ Online Transaction Fraud Detection
 
-An AI-powered dashboard designed to help local vendors detect potentially fraudulent online transactions. This application takes daily settlement CSVs and runs an on-the-fly analysis using a pre-trained XGBoost model to assign risk scores to every transaction.
+An AI-powered dashboard designed to help local vendors review potentially suspicious online transactions. This application takes an anonymized transaction CSV and runs an on-the-fly analysis using a pre-trained XGBoost model to assign risk indicators to every transaction.
 
 ## 🚀 Features
 - **Machine Learning Integration:** Uses a robust, historical-data-trained XGBoost model.
@@ -20,6 +20,14 @@ fraud_detection_SI/
     ├── scaler.pkl          # Scikit-Learn standard scaler
     └── column_names.pkl    # Expected feature schema
 ```
+
+## 🔐 Responsible use
+
+- Use only anonymized or synthetic transaction data for demonstrations.
+- Do not upload customer names, phone numbers, account numbers, payment IDs, or other unnecessary personal information.
+- A risk level is not proof of fraud. Verify unusual activity through the official bank or payment provider.
+- The dashboard is a screening and awareness tool; it does not replace payment-provider controls or human review.
+- The current repository does not include model-training or evaluation metrics, so no accuracy claim should be made from this project alone.
 
 ---
 
@@ -53,6 +61,14 @@ Launch the Streamlit dashboard:
 streamlit run app.py
 ```
 The app will open automatically in your browser at `http://localhost:8501`.
+
+## 🧪 Demonstration
+
+For a safe internship demonstration, prepare a small synthetic CSV containing only
+the feature columns expected by the model and no real customer information. Upload
+it through the dashboard, review the risk indicators, and download the results.
+Record the model version, dataset source, and evaluation metrics separately if they
+become available; do not invent these values.
 
 ---
 

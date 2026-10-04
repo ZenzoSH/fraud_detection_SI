@@ -3,44 +3,64 @@ Streamlit Online Fraud Detection Dashboard for Local Vendors
 """
 
 import pickle
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 import numpy as np
 import xgboost
 
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "models"
+MAX_UPLOAD_SIZE_MB = 10
+
 # --- 1. CONFIGURATION & UI SETUP ---
 st.set_page_config(page_title="Vendor Fraud Detection", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Online Transaction Fraud Detection")
-st.markdown("Upload your daily transaction CSV to detect potentially fraudulent activities.")
+st.markdown(
+    "Upload an anonymized transaction CSV to identify transactions that may "
+    "need additional verification."
+)
+
+st.info(
+    "This dashboard provides risk indicators only. A HIGH risk result does not "
+    "confirm fraud and must be verified through the official payment provider."
+)
 
 # --- 2. MODEL LOADING ---
 @st.cache_resource
 def load_models():
     """Loads the pre-trained ML model, scaler, and expected feature columns."""
-    try:
-        with open('models/xgb_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        with open('models/scaler.pkl', 'rb') as f:
-            scaler = pickle.load(f)
-        with open('models/column_names.pkl', 'rb') as f:
-            expected_cols = pickle.load(f)
-        return model, scaler, expected_cols
-    except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None, None
+    with open(MODEL_DIR / "xgb_model.pkl", "rb") as f:
+        model = pickle.load(f)
+    with open(MODEL_DIR / "scaler.pkl", "rb") as f:
+        scaler = pickle.load(f)
+    with open(MODEL_DIR / "column_names.pkl", "rb") as f:
+        expected_cols = pickle.load(f)
 
-model, scaler, expected_cols = load_models()
+    if not expected_cols:
+        raise ValueError("The model feature list is empty.")
+
+    return model, scaler, list(expected_cols)
+
+try:
+    model, scaler, expected_cols = load_models()
+except (OSError, EOFError, ValueError, pickle.UnpicklingError) as error:
+    model, scaler, expected_cols = None, None, None
+    st.error(f"Unable to load the fraud-detection model files: {error}")
 
 # --- 3. INSTRUCTIONS ---
 with st.expander("📖 How to use this tool", expanded=True):
     st.markdown("""
     ### Steps to run an Audit:
-    1. Export your transaction report as a CSV.
+    1. Export an anonymized transaction report as a CSV.
     2. Upload it below and click **Run Fraud Detection**.
-    3. Our pre-trained ML engine (XGBoost) will analyze the historical patterns to detect fraud.
+    3. Review the risk indicators and verify unusual transactions through your payment provider.
 
-    *Note: The CSV must contain transaction details like Amount, Balances, and Type (CASH_OUT, PAYMENT, etc.).*
+    *The CSV should contain transaction details such as Amount, Balances, and Type
+    (CASH_OUT, PAYMENT, etc.). Do not upload names, phone numbers, account numbers,
+    payment IDs, or other unnecessary personal information.*
     """)
 
 st.divider()
@@ -49,12 +69,23 @@ st.divider()
 uploaded_file = st.file_uploader("Upload Transaction CSV", type=["csv"])
 
 if uploaded_file is not None and model is not None:
+    if uploaded_file.size > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+        st.error(f"Please upload a CSV smaller than {MAX_UPLOAD_SIZE_MB} MB.")
+        st.stop()
+
     if st.button("🔍 Run Fraud Detection", use_container_width=True):
         with st.spinner("Analyzing transactions using AI..."):
             try:
                 # Read the CSV file
                 df = pd.read_csv(uploaded_file)
-                
+                if df.empty:
+                    raise ValueError("The uploaded CSV does not contain any rows.")
+                if df.columns.duplicated().any():
+                    duplicate_columns = df.columns[df.columns.duplicated()].tolist()
+                    raise ValueError(
+                        f"Duplicate column names are not supported: {duplicate_columns}"
+                    )
+
                 # Keep a copy of the original data to display later
                 results_df = df.copy()
 
@@ -70,7 +101,13 @@ if uploaded_file is not None and model is not None:
                         df[col] = 0
 
                 # Select only the columns the model expects in the correct order
-                X = df[expected_cols]
+                X = df[expected_cols].apply(pd.to_numeric, errors="coerce")
+                invalid_columns = X.columns[X.isna().any()].tolist()
+                if invalid_columns:
+                    raise ValueError(
+                        "These model input columns contain missing or non-numeric "
+                        f"values: {invalid_columns}"
+                    )
 
                 # --- 6. DATA SCALING ---
                 # Scale features using the pre-trained scaler
@@ -105,6 +142,10 @@ if uploaded_file is not None and model is not None:
                 m1, m2 = st.columns(2)
                 m1.metric("Total Transactions Scanned", n_total)
                 m2.metric("High Risk Anomalies", int(n_high))
+                st.caption(
+                    "Risk levels are screening indicators. Confirm unusual activity "
+                    "using your bank or payment provider before taking action."
+                )
 
                 # Highlight rows based on risk level
                 def highlight_risk(row):
@@ -128,5 +169,7 @@ if uploaded_file is not None and model is not None:
                     mime="text/csv",
                 )
 
-            except Exception as e:
-                st.error(f"Error processing the file: {e}")
+            except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as error:
+                st.error(f"Unable to read the CSV file: {error}")
+            except (ValueError, KeyError, TypeError) as error:
+                st.error(f"Unable to analyse the uploaded data: {error}")
